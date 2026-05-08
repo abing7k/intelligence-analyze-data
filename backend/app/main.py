@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from threading import Thread
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import analysis, charts, datasets, reports, system
 from app.core.config import get_settings
@@ -15,6 +17,9 @@ from app.models.database import init_db
 from app.services import llm_service
 
 settings = get_settings()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 
 
 @asynccontextmanager
@@ -82,8 +87,8 @@ async def unhandled_error_handler(request: Request, exc: Exception):
     )
 
 
-@app.get("/")
-def root(request: Request):
+@app.get("/api")
+def api_root(request: Request):
     return ok(
         {
             "name": "Intelligent Data Analysis System API",
@@ -99,3 +104,25 @@ app.include_router(datasets.router, prefix="/api")
 app.include_router(analysis.router, prefix="/api")
 app.include_router(charts.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
+
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def frontend_fallback(full_path: str):
+    if FRONTEND_INDEX.exists():
+        requested_path = (FRONTEND_DIST / full_path).resolve()
+        if requested_path.is_file() and FRONTEND_DIST.resolve() in requested_path.parents:
+            return FileResponse(requested_path)
+        return FileResponse(FRONTEND_INDEX)
+    return JSONResponse(
+        status_code=404,
+        content={
+            "success": False,
+            "error": {
+                "code": "FRONTEND_NOT_BUILT",
+                "message": "Frontend assets are not available. Build the frontend or use /api endpoints.",
+            },
+        },
+    )

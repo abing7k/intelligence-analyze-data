@@ -1,0 +1,20 @@
+services:
+  app:
+    build:
+      context: .
+    image: intelligence-analyze-data:latest
+    container_name: intelligence-analyze-data
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      ALLOW_ORIGINS: https://tool.0378999.xyz,http://tool.0378999.xyz
+      DATABASE_PATH: backend/storage/app.sqlite3
+      UPLOAD_DIR: backend/storage/uploads
+      CHART_DIR: backend/storage/charts
+      REPORT_DIR: backend/storage/reports
+    ports:
+      - "127.0.0.1:18080:8000"
+    volumes:
+      - ./backend/storage:/app/backend/storage
