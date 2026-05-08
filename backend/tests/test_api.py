@@ -83,7 +83,7 @@ def test_analysis_query_history_and_report(monkeypatch):
                 "question": "Compare GDP by country",
                 "options": {
                     "language": "zh",
-                    "model_id": "gpt-5-codex",
+                    "model_id": "gpt-5.5",
                     "chart_preference": "bar",
                     "include_generated_code": True,
                 },
@@ -91,7 +91,7 @@ def test_analysis_query_history_and_report(monkeypatch):
         )
         assert response.status_code == 200
         analysis = response.json()["data"]
-        assert analysis["model_id"] == "gpt-5-codex"
+        assert analysis["model_id"] == "gpt-5.5"
         assert analysis["generated_code"]
         assert analysis["chart_url"]
         assert "## Summary" in analysis["markdown_result"]

@@ -522,6 +522,18 @@ strong {
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
 }
 
+.selected-model-text {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 10px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 0.92rem;
+}
+
 .model-control small {
   color: var(--muted);
   font-size: 0.78rem;

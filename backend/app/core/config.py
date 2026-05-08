@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENAI_API_KEY", "API_KEY"),
     )
     base_url: str = Field(
-        default="https://api.openai.com/v1",
+        default="http://144.22.219.57:10001/v1",
         validation_alias=AliasChoices("OPENAI_BASE_URL", "BASE_URL"),
     )
     default_model: str = Field(
@@ -65,23 +65,23 @@ class Settings(BaseSettings):
     openai_max_retries: int = 2
     openai_reasoning_effort: str = "medium"
 
-    default_model_id: str = "gpt-5-codex"
+    default_model_id: str = "gpt-5.5"
 
-    model_1_id: str | None = "gpt-5-codex"
-    model_1_label: str | None = "GPT-5 Codex"
-    model_1_provider: str | None = "openai"
-    model_1_model: str | None = "gpt-5-codex"
+    model_1_id: str | None = "gpt-5.5"
+    model_1_label: str | None = "GPT-5.5"
+    model_1_provider: str | None = "sub2api-primary"
+    model_1_model: str | None = "gpt-5.5"
     model_1_api_key: SecretStr | None = None
-    model_1_base_url: str | None = "https://yunwu.ai/v1/responses"
-    model_1_api_style: ApiStyle = "responses"
+    model_1_base_url: str | None = "http://144.22.219.57:10001/v1"
+    model_1_api_style: ApiStyle = "chat"
 
-    model_2_id: str | None = "gpt-5.5"
+    model_2_id: str | None = "gpt-5.5-backup"
     model_2_label: str | None = "GPT-5.5 Backup"
-    model_2_provider: str | None = "openai"
+    model_2_provider: str | None = "api-866646-backup"
     model_2_model: str | None = "gpt-5.5"
     model_2_api_key: SecretStr | None = None
     model_2_base_url: str | None = "https://api.866646.xyz/v1"
-    model_2_api_style: ApiStyle = "auto"
+    model_2_api_style: ApiStyle = "chat"
 
     database_path: str = "backend/storage/app.sqlite3"
     upload_dir: str = "backend/storage/uploads"
@@ -153,7 +153,7 @@ class Settings(BaseSettings):
 
     @property
     def llm_model_ids(self) -> set[str]:
-        return {model.id for model in self.llm_models}
+        return {model.id for model in self.llm_models} | {model.model for model in self.llm_models}
 
     @property
     def default_llm_model(self) -> LLMModelConfig:
@@ -178,8 +178,30 @@ class Settings(BaseSettings):
             details={"available_model_ids": sorted(self.llm_model_ids)},
         )
 
+    def resolve_llm_model_chain(self, model_id: str | None = None) -> list[LLMModelConfig]:
+        selected_model = self.resolve_llm_model(model_id)
+        return [model for model in self.llm_models if model.model == selected_model.model] or [selected_model]
+
     def public_llm_models(self) -> list[dict[str, str | bool]]:
-        return [model.public_dict() for model in self.llm_models]
+        models: list[dict[str, str | bool]] = []
+        seen: set[str] = set()
+        default_model_name = self.default_llm_model.model
+        for model in self.llm_models:
+            if model.model in seen:
+                continue
+            seen.add(model.model)
+            providers = [candidate.provider for candidate in self.llm_models if candidate.model == model.model]
+            models.append(
+                {
+                    "id": model.model,
+                    "label": model.label,
+                    "provider": " -> ".join(providers),
+                    "model": model.model,
+                    "api_style": model.api_style,
+                    "is_default": model.model == default_model_name,
+                }
+            )
+        return models
 
     @property
     def max_upload_bytes(self) -> int:

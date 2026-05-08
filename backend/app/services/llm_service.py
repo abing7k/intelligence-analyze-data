@@ -10,40 +10,44 @@ from app.models.schemas import GeneratedAnalysis
 
 def validate_model(model_id: str | None = None) -> dict[str, Any]:
     settings = get_settings()
-    model_config = settings.resolve_llm_model(model_id)
-    if not model_config.api_key_value:
-        return {
-            "model_id": model_config.id,
-            "provider": model_config.provider,
-            "model": model_config.model,
-            "available": False,
-            "message": f"API key is not configured for model '{model_config.id}'.",
-        }
-    try:
-        if model_config.api_style == "responses":
-            _probe_responses(model_config)
-        else:
-            try:
-                client = _openai_client(model_config)
-                model = client.models.retrieve(model_config.model)
-                getattr(model, "id", None) or model_config.model
-            except Exception:
+    model_chain = settings.resolve_llm_model_chain(model_id)
+    errors: list[str] = []
+    for index, model_config in enumerate(model_chain):
+        if not model_config.api_key_value:
+            errors.append(f"{model_config.provider}: API key is not configured.")
+            continue
+        try:
+            if model_config.api_style == "responses":
+                _probe_responses(model_config)
+            else:
                 _probe_model_call(model_config)
-        return {
-            "model_id": model_config.id,
-            "provider": model_config.provider,
-            "model": model_config.model,
-            "available": True,
-            "message": "Model is available.",
-        }
-    except Exception as exc:
-        return {
-            "model_id": model_config.id,
-            "provider": model_config.provider,
-            "model": model_config.model,
-            "available": False,
-            "message": _safe_error_message(exc),
-        }
+            return {
+                "model_id": model_config.model,
+                "provider": model_config.provider,
+                "model": model_config.model,
+                "available": True,
+                "fallback_enabled": len(model_chain) > 1,
+                "active_provider": model_config.provider,
+                "provider_priority": [candidate.provider for candidate in model_chain],
+                "message": (
+                    "Model is available."
+                    if index == 0
+                    else f"Primary provider failed; using fallback provider '{model_config.provider}'."
+                ),
+            }
+        except Exception as exc:
+            errors.append(f"{model_config.provider}: {_safe_error_message(exc)}")
+
+    selected = model_chain[0]
+    return {
+        "model_id": selected.model,
+        "provider": selected.provider,
+        "model": selected.model,
+        "available": False,
+        "fallback_enabled": len(model_chain) > 1,
+        "provider_priority": [candidate.provider for candidate in model_chain],
+        "message": "All configured providers failed: " + " | ".join(errors[-3:]),
+    }
 
 
 def generate_analysis_code(
@@ -134,26 +138,22 @@ def explain_result(
 
 
 def _invoke_model(system_prompt: str, user_prompt: str, json_mode: bool, model_id: str | None = None) -> str:
-    model_config = get_settings().resolve_llm_model(model_id)
-    if not model_config.api_key_value:
-        raise AppError(
-            code="MODEL_UNAVAILABLE",
-            message=f"API key is not configured for model '{model_config.id}'.",
-            status_code=503,
-        )
-
-    invokers = _invoker_order(model_config)
+    model_chain = get_settings().resolve_llm_model_chain(model_id)
     errors: list[str] = []
-    for invoker in invokers:
-        try:
-            return invoker(system_prompt, user_prompt, json_mode, model_config)
-        except Exception as exc:
-            errors.append(_safe_error_message(exc))
+    for model_config in model_chain:
+        if not model_config.api_key_value:
+            errors.append(f"{model_config.provider}: API key is not configured.")
+            continue
+        for invoker in _invoker_order(model_config):
+            try:
+                return invoker(system_prompt, user_prompt, json_mode, model_config)
+            except Exception as exc:
+                errors.append(f"{model_config.provider}: {_safe_error_message(exc)}")
 
     raise AppError(
         code="MODEL_UNAVAILABLE",
         message=(
-            f"Model '{model_config.id}' failed for all configured OpenAI-compatible paths: "
+            f"Model '{model_chain[0].model}' failed for all configured providers: "
             f"{' | '.join(errors[-3:])}"
         ),
         status_code=503,

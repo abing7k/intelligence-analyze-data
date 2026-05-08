@@ -50,20 +50,12 @@ const defaultLanguages = [
 
 const defaultModels = [
   {
-    id: 'gpt-5-codex',
-    label: 'GPT-5 Codex',
-    provider: 'openai',
-    model: 'gpt-5-codex',
-    api_style: 'responses',
-    is_default: true,
-  },
-  {
     id: 'gpt-5.5',
-    label: 'GPT-5.5 Backup',
-    provider: 'openai',
+    label: 'GPT-5.5',
+    provider: 'sub2api-primary -> api-866646-backup',
     model: 'gpt-5.5',
-    api_style: 'auto',
-    is_default: false,
+    api_style: 'chat',
+    is_default: true,
   },
 ]
 
@@ -83,6 +75,7 @@ const messages = {
     selectedModel: 'Analysis model',
     defaultModel: 'Default',
     backupModel: 'Backup',
+    automaticFailover: 'Automatic fallback',
     modelReady: 'Selected model ready',
     modelUnavailable: 'Selected model unavailable',
     datasets: 'Datasets',
@@ -170,6 +163,7 @@ const messages = {
     selectedModel: '分析模型',
     defaultModel: '默认',
     backupModel: '备选',
+    automaticFailover: '自动切换备用 API',
     modelReady: '所选模型可用',
     modelUnavailable: '所选模型不可用',
     datasets: '数据集',
@@ -252,6 +246,7 @@ const messages = {
     selectedModel: 'Model analisis',
     defaultModel: 'Lalai',
     backupModel: 'Sandaran',
+    automaticFailover: 'Sandaran automatik',
     modelReady: 'Model dipilih sedia',
     modelUnavailable: 'Model dipilih tidak tersedia',
     datasets: 'Set data',
@@ -464,7 +459,7 @@ async function bootstrap() {
 }
 
 function initializeSelectedModel() {
-  const defaultModelId = system.config?.default_model_id || system.config?.model_name || 'gpt-5-codex'
+  const defaultModelId = system.config?.default_model_id || system.config?.model_name || 'gpt-5.5'
   const availableIds = modelOptions.value.map(modelId)
   if (!selectedModelId.value || !availableIds.includes(selectedModelId.value)) {
     selectedModelId.value = availableIds.includes(defaultModelId) ? defaultModelId : availableIds[0]
@@ -995,13 +990,14 @@ function showNotice(message) {
         <div class="analysis-controls">
           <div class="control-group model-control">
             <span>{{ t.selectedModel }}</span>
-            <select v-model="selectedModelId" :disabled="state.analyzing" @change="onModelChanged">
+            <select v-if="modelOptions.length > 1" v-model="selectedModelId" :disabled="state.analyzing" @change="onModelChanged">
               <option v-for="model in modelOptions" :key="modelId(model)" :value="modelId(model)">
                 {{ model.label || model.model || modelId(model) }}
               </option>
             </select>
+            <strong v-else class="selected-model-text">{{ selectedModelLabel }}</strong>
             <small>
-              {{ selectedModel?.is_default ? t.defaultModel : t.backupModel }}
+              {{ t.automaticFailover }}
               <template v-if="selectedModel?.api_style"> · {{ selectedModel.api_style }}</template>
             </small>
           </div>

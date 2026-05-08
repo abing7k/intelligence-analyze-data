@@ -1,16 +1,28 @@
 import json
-import textwrap
+import re
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape as xml_escape
 
-import matplotlib
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Image, PageBreak, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus.flowables import HRFlowable
 
-matplotlib.use("Agg")
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-
-from app.services.chart_service import _find_chart_font
+PDF_FONT_NAME = "STSong-Light"
+PDF_FALLBACK_FONT_NAME = "NotoSansCJK"
+PDF_FONT_PATHS = (
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+)
 
 
 def render_analysis_markdown(history: dict[str, Any]) -> str:
@@ -21,9 +33,9 @@ def render_analysis_markdown(history: dict[str, Any]) -> str:
         _clean_text(history.get("question") or "-"),
         "",
         "## Summary",
-        _clean_text(history.get("text_result") or "-"),
-        "",
     ]
+    lines.extend(_render_text_result_lines(history.get("text_result")))
+    lines.append("")
 
     comprehensive = history.get("comprehensive_analysis") or {}
     if comprehensive:
@@ -64,50 +76,348 @@ def render_markdown_pdf(markdown: str, output_path: Path) -> None:
 
 
 def render_markdown_pdf_with_images(markdown: str, output_path: Path, image_paths: list[str]) -> None:
-    font_properties = _find_chart_font()
-    lines = _wrap_pdf_lines(markdown)
-    lines_per_page = 54
-    page_chunks = [lines[index : index + lines_per_page] for index in range(0, len(lines), lines_per_page)] or [[]]
-
+    font_name = _register_pdf_font()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with PdfPages(output_path) as pdf:
-        for page_index, chunk in enumerate(page_chunks, start=1):
-            fig = plt.figure(figsize=(8.27, 11.69), dpi=140)
-            fig.patch.set_facecolor("white")
-            y = 0.96
-            for line in chunk:
-                fig.text(
-                    0.07,
-                    y,
-                    line or " ",
-                    fontsize=_font_size_for_line(line),
-                    fontproperties=font_properties,
-                    va="top",
-                    color="#111827",
-                )
-                y -= 0.017
-            fig.text(
-                0.93,
-                0.025,
-                str(page_index),
-                fontsize=8,
-                fontproperties=font_properties,
-                ha="right",
-                color="#6b7280",
-            )
-            pdf.savefig(fig)
-            plt.close(fig)
-        for image_path in image_paths:
-            path = Path(image_path)
-            if not path.exists():
+    doc = SimpleDocTemplate(
+        str(output_path),
+        pagesize=A4,
+        leftMargin=0.58 * inch,
+        rightMargin=0.58 * inch,
+        topMargin=0.62 * inch,
+        bottomMargin=0.58 * inch,
+        title="Analysis Report",
+        author="Intelligent Data Analysis System",
+    )
+    story = _build_pdf_story(markdown, image_paths, font_name, doc.width, doc.height)
+    doc.build(story, onFirstPage=_draw_pdf_footer, onLaterPages=_draw_pdf_footer)
+
+
+def _register_pdf_font() -> str:
+    for font_path in PDF_FONT_PATHS:
+        path = Path(font_path)
+        if not path.exists():
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont(PDF_FALLBACK_FONT_NAME, str(path), subfontIndex=0))
+            return PDF_FALLBACK_FONT_NAME
+        except TypeError:
+            try:
+                pdfmetrics.registerFont(TTFont(PDF_FALLBACK_FONT_NAME, str(path)))
+                return PDF_FALLBACK_FONT_NAME
+            except Exception:
                 continue
-            image = plt.imread(path)
-            fig, ax = plt.subplots(figsize=(11.69, 8.27), dpi=140)
-            ax.imshow(image)
-            ax.axis("off")
-            fig.tight_layout(pad=0.2)
-            pdf.savefig(fig)
-            plt.close(fig)
+        except Exception:
+            continue
+    try:
+        pdfmetrics.getFont(PDF_FONT_NAME)
+    except KeyError:
+        pdfmetrics.registerFont(UnicodeCIDFont(PDF_FONT_NAME))
+    return PDF_FONT_NAME
+
+
+def _pdf_styles(font_name: str) -> dict[str, ParagraphStyle]:
+    base = ParagraphStyle(
+        "Body",
+        fontName=font_name,
+        fontSize=9.5,
+        leading=13.5,
+        textColor=colors.HexColor("#1f2937"),
+        alignment=TA_LEFT,
+        spaceAfter=6,
+    )
+    return {
+        "title": ParagraphStyle(
+            "Title",
+            parent=base,
+            fontSize=20,
+            leading=26,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=16,
+        ),
+        "heading2": ParagraphStyle(
+            "Heading2",
+            parent=base,
+            fontSize=14,
+            leading=18,
+            textColor=colors.HexColor("#111827"),
+            spaceBefore=10,
+            spaceAfter=8,
+        ),
+        "heading3": ParagraphStyle(
+            "Heading3",
+            parent=base,
+            fontSize=11.5,
+            leading=15,
+            textColor=colors.HexColor("#111827"),
+            spaceBefore=8,
+            spaceAfter=6,
+        ),
+        "heading4": ParagraphStyle(
+            "Heading4",
+            parent=base,
+            fontSize=10.2,
+            leading=13.5,
+            textColor=colors.HexColor("#111827"),
+            spaceBefore=6,
+            spaceAfter=4,
+        ),
+        "body": base,
+        "bullet": ParagraphStyle(
+            "Bullet",
+            parent=base,
+            leftIndent=12,
+            firstLineIndent=-8,
+            spaceAfter=4,
+        ),
+        "code": ParagraphStyle(
+            "Code",
+            parent=base,
+            fontSize=8,
+            leading=10,
+            backColor=colors.HexColor("#f8fafc"),
+            borderColor=colors.HexColor("#e5e7eb"),
+            borderWidth=0.5,
+            borderPadding=6,
+            spaceBefore=4,
+            spaceAfter=8,
+        ),
+        "table_cell": ParagraphStyle(
+            "TableCell",
+            parent=base,
+            fontSize=7.5,
+            leading=9.5,
+            spaceAfter=0,
+        ),
+        "table_header": ParagraphStyle(
+            "TableHeader",
+            parent=base,
+            fontSize=7.7,
+            leading=9.7,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=0,
+        ),
+    }
+
+
+def _build_pdf_story(
+    markdown: str,
+    image_paths: list[str],
+    font_name: str,
+    available_width: float,
+    available_height: float,
+) -> list[Any]:
+    styles = _pdf_styles(font_name)
+    story: list[Any] = []
+    lines = markdown.splitlines()
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index].rstrip()
+        line = raw_line.strip()
+
+        if not line:
+            story.append(Spacer(1, 4))
+            index += 1
+            continue
+
+        if line.startswith("```"):
+            code_lines: list[str] = []
+            index += 1
+            while index < len(lines) and not lines[index].strip().startswith("```"):
+                code_lines.append(lines[index].rstrip())
+                index += 1
+            if index < len(lines):
+                index += 1
+            story.append(Preformatted("\n".join(code_lines) or " ", styles["code"], maxLineLength=92))
+            continue
+
+        if _is_markdown_table_line(line):
+            table_lines: list[str] = []
+            while index < len(lines) and _is_markdown_table_line(lines[index].strip()):
+                table_lines.append(lines[index].strip())
+                index += 1
+            table = _markdown_table_to_flowable(table_lines, styles, available_width)
+            if table is not None:
+                story.append(table)
+                story.append(Spacer(1, 8))
+            continue
+
+        if _is_markdown_image(line):
+            index += 1
+            continue
+
+        if _is_markdown_rule(line):
+            story.append(
+                HRFlowable(
+                    width="100%",
+                    thickness=0.45,
+                    color=colors.HexColor("#d1d5db"),
+                    spaceBefore=6,
+                    spaceAfter=8,
+                )
+            )
+        elif line.startswith("# "):
+            story.append(Paragraph(_inline_text(line[2:]), styles["title"]))
+        elif line.startswith("## "):
+            story.append(Paragraph(_inline_text(line[3:]), styles["heading2"]))
+        elif line.startswith("### "):
+            story.append(Paragraph(_inline_text(line[4:]), styles["heading3"]))
+        elif line.startswith("#### "):
+            story.append(Paragraph(_inline_text(line[5:]), styles["heading4"]))
+        elif line.startswith("##### "):
+            story.append(Paragraph(_inline_text(line[6:]), styles["heading4"]))
+        elif line.startswith("###### "):
+            story.append(Paragraph(_inline_text(line[7:]), styles["heading4"]))
+        elif line.startswith("- "):
+            story.append(Paragraph(f"• {_inline_text(line[2:])}", styles["bullet"]))
+        elif re.match(r"^\d+\.\s+", line):
+            story.append(Paragraph(_inline_text(line), styles["bullet"]))
+        else:
+            story.append(Paragraph(_inline_text(line), styles["body"]))
+        index += 1
+
+    existing_image_paths = [Path(path) for path in image_paths if Path(path).exists()]
+    if existing_image_paths:
+        story.append(PageBreak())
+        story.append(Paragraph("Charts", styles["heading2"]))
+        for image_path in existing_image_paths:
+            image = Image(str(image_path))
+            max_width = available_width
+            max_height = available_height * 0.62
+            scale = min(max_width / image.imageWidth, max_height / image.imageHeight, 1)
+            image.drawWidth = image.imageWidth * scale
+            image.drawHeight = image.imageHeight * scale
+            story.extend([image, Spacer(1, 12)])
+    return story
+
+
+def _markdown_table_to_flowable(
+    table_lines: list[str],
+    styles: dict[str, ParagraphStyle],
+    available_width: float,
+) -> Table | None:
+    rows = [_split_markdown_table_row(line) for line in table_lines]
+    rows = [row for row in rows if row]
+    rows = [row for row in rows if not _is_separator_row(row)]
+    if not rows:
+        return None
+
+    column_count = max(len(row) for row in rows)
+    normalized_rows = [row + [""] * (column_count - len(row)) for row in rows]
+    col_widths = [available_width / column_count] * column_count
+    data = [
+        [
+            Paragraph(_inline_text(cell), styles["table_header" if row_index == 0 else "table_cell"])
+            for cell in row
+        ]
+        for row_index, row in enumerate(normalized_rows)
+    ]
+    table = Table(data, colWidths=col_widths, repeatRows=1, hAlign="LEFT")
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d1d5db")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    return table
+
+
+def _draw_pdf_footer(canvas, doc) -> None:
+    font_name = _register_pdf_font()
+    canvas.saveState()
+    canvas.setFont(font_name, 8)
+    canvas.setFillColor(colors.HexColor("#6b7280"))
+    canvas.drawRightString(A4[0] - 0.58 * inch, 0.34 * inch, str(canvas.getPageNumber()))
+    canvas.restoreState()
+
+
+def _is_markdown_table_line(line: str) -> bool:
+    return line.startswith("|") and line.endswith("|")
+
+
+def _is_markdown_image(line: str) -> bool:
+    return bool(re.match(r"^!\[[^\]]*\]\([^)]+\)$", line))
+
+
+def _is_markdown_rule(line: str) -> bool:
+    return bool(re.fullmatch(r"(-{3,}|\*{3,}|_{3,})", line.strip()))
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    stripped = line.strip().strip("|")
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for character in stripped:
+        if escaped:
+            current.append(character)
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if character == "|":
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(character)
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _is_separator_row(row: list[str]) -> bool:
+    return bool(row) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in row)
+
+
+def _inline_text(value: Any) -> str:
+    text = _clean_text(value)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = text.replace("_No table result._", "No table result.")
+    text = text.replace("_No execution plan._", "No execution plan.")
+    text = text.replace("_No metadata._", "No metadata.")
+    escaped = xml_escape(text)
+    return escaped.replace("&lt;br&gt;", "<br/>").replace("&lt;br/&gt;", "<br/>")
+
+
+def _render_text_result_lines(value: Any) -> list[str]:
+    text = _clean_text(value)
+    if not text:
+        return ["-"]
+
+    marker = "Question-specific result:"
+    if marker not in text:
+        return _normalize_embedded_markdown_lines(text)
+
+    summary, question_specific = text.split(marker, 1)
+    lines = _normalize_embedded_markdown_lines(summary)
+    question_specific = question_specific.strip()
+    if question_specific:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.extend(["## Question-Specific Result", ""])
+        lines.extend(_normalize_embedded_markdown_lines(question_specific, heading_offset=2))
+    return lines or ["-"]
+
+
+def _normalize_embedded_markdown_lines(text: str, heading_offset: int = 0) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.strip().splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+        if heading:
+            level = min(len(heading.group(1)) + heading_offset, 6)
+            line = f"{'#' * level} {heading.group(2).strip()}"
+        lines.append(line)
+    return lines
 
 
 def chart_image_paths(history: dict[str, Any]) -> list[str]:
@@ -277,31 +587,6 @@ def _render_metadata(history: dict[str, Any]) -> str:
         if value not in (None, "")
     ]
     return "\n".join(lines) if lines else "_No metadata._"
-
-
-def _wrap_pdf_lines(markdown: str) -> list[str]:
-    wrapped: list[str] = []
-    in_code_block = False
-    for raw_line in markdown.splitlines():
-        line = raw_line.rstrip()
-        if line.startswith("```"):
-            in_code_block = not in_code_block
-            wrapped.append(line)
-            continue
-        width = 112 if in_code_block or line.startswith("|") else 88
-        if not line:
-            wrapped.append("")
-            continue
-        wrapped.extend(textwrap.wrap(line, width=width, replace_whitespace=False) or [""])
-    return wrapped
-
-
-def _font_size_for_line(line: str) -> float:
-    if line.startswith("# "):
-        return 13
-    if line.startswith("## "):
-        return 11
-    return 8.5
 
 
 def _escape_table_cell(value: Any) -> str:

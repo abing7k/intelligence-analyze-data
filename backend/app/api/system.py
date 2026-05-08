@@ -48,7 +48,7 @@ def client_config(request: Request):
             "supported_file_types": settings.supported_file_types,
             "provider": settings.provider,
             "model_name": settings.default_llm_model.model,
-            "default_model_id": settings.default_llm_model.id,
+            "default_model_id": settings.default_llm_model.model,
             "models": settings.public_llm_models(),
             "supported_languages": language_choices(),
             "default_language": "en",
