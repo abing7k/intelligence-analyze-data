@@ -12,8 +12,18 @@ os.environ["DATABASE_PATH"] = str(Path(__file__).resolve().parents[1] / "storage
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.config import normalize_openai_base_url
 from app.models.schemas import GeneratedAnalysis
 from app.services import analysis_service, comprehensive_analysis_service
+
+
+def test_openai_base_url_normalization_accepts_service_roots():
+    assert normalize_openai_base_url("https://api.86gamestore.com") == "https://api.86gamestore.com/v1"
+    assert normalize_openai_base_url("https://api.86gamestore.com/v1") == "https://api.86gamestore.com/v1"
+    assert (
+        normalize_openai_base_url("https://api.86gamestore.com/v1/chat/completions")
+        == "https://api.86gamestore.com/v1"
+    )
 
 
 def test_upload_preview_and_client_config():

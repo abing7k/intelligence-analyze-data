@@ -14,8 +14,8 @@ LangChain-based intelligent data analysis prototype with a Vue frontend and Fast
 
 The backend reads both generic names (`API_KEY`, `BASE_URL`, `DEFAULT_MODEL`) and OpenAI-style names (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`). The current LLM setup exposes one `gpt-5.5` model to the UI and automatically tries the configured providers in priority order:
 
-1. `http://144.22.219.57:10001/v1`
-2. `https://api.866646.xyz/v1`
+1. `https://api.86gamestore.com/v1`
+2. `https://api.86gamestore.com`
 
 ## Backend
 

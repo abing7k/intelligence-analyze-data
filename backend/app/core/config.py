@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import AliasChoices, BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,7 +55,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENAI_API_KEY", "API_KEY"),
     )
     base_url: str = Field(
-        default="http://144.22.219.57:10001/v1",
+        default="https://api.86gamestore.com/v1",
         validation_alias=AliasChoices("OPENAI_BASE_URL", "BASE_URL"),
     )
     default_model: str = Field(
@@ -69,18 +70,18 @@ class Settings(BaseSettings):
 
     model_1_id: str | None = "gpt-5.5"
     model_1_label: str | None = "GPT-5.5"
-    model_1_provider: str | None = "sub2api-primary"
+    model_1_provider: str | None = "86gamestore-primary"
     model_1_model: str | None = "gpt-5.5"
     model_1_api_key: SecretStr | None = None
-    model_1_base_url: str | None = "http://144.22.219.57:10001/v1"
+    model_1_base_url: str | None = "https://api.86gamestore.com/v1"
     model_1_api_style: ApiStyle = "chat"
 
     model_2_id: str | None = "gpt-5.5-backup"
     model_2_label: str | None = "GPT-5.5 Backup"
-    model_2_provider: str | None = "api-866646-backup"
+    model_2_provider: str | None = "86gamestore-backup"
     model_2_model: str | None = "gpt-5.5"
     model_2_api_key: SecretStr | None = None
-    model_2_base_url: str | None = "https://api.866646.xyz/v1"
+    model_2_base_url: str | None = "https://api.86gamestore.com"
     model_2_api_style: ApiStyle = "chat"
 
     database_path: str = "backend/storage/app.sqlite3"
@@ -256,4 +257,7 @@ def normalize_openai_base_url(value: str) -> str:
     for suffix in ("/responses", "/chat/completions", "/completions"):
         if cleaned.endswith(suffix):
             return cleaned[: -len(suffix)]
+    parsed = urlsplit(cleaned)
+    if parsed.scheme and parsed.netloc and not parsed.path:
+        return urlunsplit((parsed.scheme, parsed.netloc, "/v1", "", ""))
     return cleaned
