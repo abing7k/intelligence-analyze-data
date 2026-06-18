@@ -467,6 +467,102 @@ async function postJson(path, body) {
   })
 }
 
+async function postEventStream(path, body, handlers = {}) {
+  const url = apiUrl(path)
+  let response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+  } catch (error) {
+    throw new Error(`Cannot reach API: ${error.message || 'network request failed'}`)
+  }
+
+  if (!response.ok) {
+    const payload = await readResponsePayload(response)
+    throw new Error(apiErrorMessage(response, payload))
+  }
+  if (!response.body) {
+    throw new Error('Streaming responses are not supported by this browser.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    buffer = processSseBuffer(buffer, handlers)
+    if (done) break
+  }
+  if (buffer.trim()) processSseBuffer(`${buffer}\n\n`, handlers)
+}
+
+async function readResponsePayload(response) {
+  const contentType = response.headers.get('content-type') || ''
+  try {
+    return contentType.includes('application/json') ? await response.json() : await response.text()
+  } catch (error) {
+    return ''
+  }
+}
+
+function processSseBuffer(buffer, handlers) {
+  let nextBuffer = buffer
+  let boundary = nextBuffer.indexOf('\n\n')
+  while (boundary !== -1) {
+    const rawMessage = nextBuffer.slice(0, boundary)
+    nextBuffer = nextBuffer.slice(boundary + 2)
+    const message = parseSseMessage(rawMessage)
+    if (message) handleSseMessage(message, handlers)
+    boundary = nextBuffer.indexOf('\n\n')
+  }
+  return nextBuffer
+}
+
+function parseSseMessage(rawMessage) {
+  const lines = rawMessage.replace(/\r\n/g, '\n').split('\n')
+  let event = 'message'
+  const dataLines = []
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) continue
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+  }
+  if (!dataLines.length && event === 'message') return null
+  const dataText = dataLines.join('\n')
+  let data = dataText
+  if (dataText) {
+    try {
+      data = JSON.parse(dataText)
+    } catch (error) {
+      data = dataText
+    }
+  }
+  return { event, data }
+}
+
+function handleSseMessage(message, handlers) {
+  if (message.event === 'error') {
+    throw new Error(streamErrorMessage(message.data))
+  }
+  handlers[message.event]?.(message.data)
+  handlers.message?.(message)
+}
+
+function streamErrorMessage(data) {
+  if (!data) return 'Analysis stream failed.'
+  if (typeof data === 'string') return data
+  if (data.message) return data.code ? `${data.message} (${data.code})` : data.message
+  return 'Analysis stream failed.'
+}
+
 async function bootstrap() {
   state.booting = true
   appError.value = ''
@@ -654,14 +750,26 @@ async function submitAnalysis() {
   appError.value = ''
   analysisStatus.value = t.value.running
   try {
-    const result = await postJson('/api/analysis/query', {
+    let result = null
+    await postEventStream('/api/analysis/query/stream', {
       dataset_id: selectedDataset.value.dataset_id,
       question: question.value.trim(),
       options: {
         language: language.value,
         model_id: selectedModelId.value,
       },
+    }, {
+      status: (data) => {
+        analysisStatus.value = data?.message || t.value.running
+      },
+      heartbeat: (data) => {
+        analysisStatus.value = data?.message || t.value.running
+      },
+      result: (data) => {
+        result = data
+      },
     })
+    if (!result) throw new Error('Analysis finished without a result.')
     activeResult.value = result
     analysisStatus.value = t.value.analysisComplete
     showNotice(t.value.analysisComplete)

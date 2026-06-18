@@ -1,5 +1,7 @@
 import json
+import queue
 from typing import Any
+from threading import Thread
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
@@ -16,6 +18,11 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 @router.post("/query")
 def query_analysis(request: Request, payload: AnalysisRequest):
     return ok(analysis_service.submit_analysis(payload), request)
+
+
+@router.post("/query/stream")
+def stream_analysis_post(payload: AnalysisRequest):
+    return _streaming_analysis_response(payload)
 
 
 @router.get("/query/stream")
@@ -37,7 +44,7 @@ def stream_analysis(
             "include_generated_code": include_generated_code,
         },
     )
-    return StreamingResponse(_analysis_events(payload), media_type="text/event-stream")
+    return _streaming_analysis_response(payload)
 
 
 @router.get("/history")
@@ -74,21 +81,50 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _streaming_analysis_response(payload: AnalysisRequest) -> StreamingResponse:
+    return StreamingResponse(
+        _analysis_events(payload),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 def _analysis_events(payload: AnalysisRequest):
     yield _sse("status", {"stage": "accepted", "message": "Analysis request accepted."})
-    try:
-        yield _sse("status", {"stage": "running", "message": "Generating and executing analysis."})
-        result = analysis_service.submit_analysis(payload)
-        yield _sse("result", result)
-        yield _sse("done", {"analysis_id": result["analysis_id"]})
-    except AppError as exc:
-        yield _sse(
-            "error",
-            {
-                "code": exc.code,
-                "message": exc.message,
-                "details": exc.details,
-            },
-        )
-    except Exception as exc:
-        yield _sse("error", {"code": "INTERNAL_ERROR", "message": str(exc)})
+    events: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
+
+    def run_analysis() -> None:
+        try:
+            result = analysis_service.submit_analysis(payload)
+            events.put(("result", result))
+            events.put(("done", {"analysis_id": result["analysis_id"]}))
+        except AppError as exc:
+            events.put(
+                (
+                    "error",
+                    {
+                        "code": exc.code,
+                        "message": exc.message,
+                        "details": exc.details,
+                    },
+                )
+            )
+        except Exception as exc:
+            events.put(("error", {"code": "INTERNAL_ERROR", "message": str(exc)}))
+
+    Thread(target=run_analysis, daemon=True).start()
+    yield _sse("status", {"stage": "running", "message": "Generating and executing analysis."})
+    while True:
+        try:
+            event, data = events.get(timeout=10)
+        except queue.Empty:
+            yield _sse("heartbeat", {"stage": "running", "message": "Analysis is still running."})
+            continue
+        yield _sse(event, data)
+        if event in {"done", "error"}:
+            break
+    yield _sse("close", {"message": "Analysis stream closed."})

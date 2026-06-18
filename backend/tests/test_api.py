@@ -203,6 +203,68 @@ def test_analysis_query_retries_after_generated_code_validation_error(monkeypatc
     assert response.json()["data"]["table_result"]
 
 
+def test_analysis_query_post_stream_returns_sse_result(monkeypatch):
+    def fake_generate_analysis_code(
+        dataset_schema,
+        question,
+        language,
+        chart_preference="auto",
+        model_id=None,
+        retry_feedback=None,
+    ):
+        return GeneratedAnalysis.model_validate(
+            {
+                "intent": "comparison",
+                "target_fields": ["country", "gdp"],
+                "filters": [],
+                "chart_type": "bar",
+                "steps": ["group by country", "sum GDP"],
+                "code": (
+                    "result_table = df.groupby('country', as_index=False)['gdp'].sum()\n"
+                    "chart_spec = {'chart_type': 'bar', 'x_field': 'country', "
+                    "'y_field': 'gdp', 'title': 'GDP by country'}"
+                ),
+                "chart_spec": {
+                    "chart_type": "bar",
+                    "x_field": "country",
+                    "y_field": "gdp",
+                    "title": "GDP by country",
+                },
+                "confidence": 0.9,
+            }
+        )
+
+    monkeypatch.setattr(analysis_service.llm_service, "generate_analysis_code", fake_generate_analysis_code)
+    monkeypatch.setattr(
+        analysis_service.llm_service,
+        "explain_result",
+        lambda **kwargs: "The table compares GDP by country.",
+    )
+
+    with TestClient(app) as client:
+        upload = client.post(
+            "/api/datasets/upload",
+            files={"file": ("stream.csv", b"country,year,gdp\nMalaysia,2020,337\nChina,2020,14722\n", "text/csv")},
+        )
+        dataset_id = upload.json()["data"]["dataset_id"]
+
+        with client.stream(
+            "POST",
+            "/api/analysis/query/stream",
+            json={
+                "dataset_id": dataset_id,
+                "question": "Compare GDP by country",
+                "options": {"language": "en", "model_id": "gpt-5.5"},
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "event: result" in body
+    assert "event: done" in body
+    assert "GDP by country" in body
+
+
 def test_comprehensive_analysis_includes_predictive_metrics():
     frame = {
         "age": list(range(20, 120)),
