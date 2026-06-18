@@ -60,8 +60,10 @@ def generate_analysis_code(
     system_prompt = (
         "You are a LangChain-orchestrated senior data analyst. Generate safe Python pandas code "
         "for an uploaded tabular dataset. The code will run in a restricted environment where "
-        "df, pd, and np already exist. Do not read or write files. Do not use network, OS, "
-        "subprocess, pathlib, requests, eval, exec, open, or hidden/private attributes. "
+        "df, pd, and np already exist. If imports are necessary, only import pandas, numpy, "
+        "math, statistics, or time; do not use time.sleep. Do not read or write files. "
+        "Do not use network, OS, subprocess, pathlib, requests, eval, exec, open, "
+        "or hidden/private attributes. "
         "The code must assign result_table and chart_spec. result_table should be a pandas "
         "DataFrame, Series, list of dicts, or dict. chart_spec must be a dict with chart_type, "
         "x_field, y_field, and title when a chart is useful. chart_spec.title must be a complete, "

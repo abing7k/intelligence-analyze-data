@@ -16,7 +16,10 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.services.preprocess_service import dataframe_records, to_jsonable
 
-SAFE_IMPORTS = {"pandas", "numpy", "math", "statistics"}
+SAFE_IMPORTS = {"pandas", "numpy", "math", "statistics", "time"}
+BANNED_IMPORT_MEMBERS = {
+    "time": {"sleep"},
+}
 BANNED_NAMES = {
     "__import__",
     "eval",
@@ -55,6 +58,7 @@ BANNED_ATTRIBUTES = {
     "read_pickle",
     "read_parquet",
     "read_sql",
+    "sleep",
 }
 BANNED_MODULES = {
     "os",
@@ -94,6 +98,14 @@ class SafetyVisitor(ast.NodeVisitor):
         module = (node.module or "").split(".")[0]
         if module not in SAFE_IMPORTS:
             raise AppError(code="CODE_UNSAFE", message=f"Import is not allowed: {node.module}", status_code=400)
+        banned_members = BANNED_IMPORT_MEMBERS.get(module, set())
+        for alias in node.names:
+            if alias.name in banned_members:
+                raise AppError(
+                    code="CODE_UNSAFE",
+                    message=f"Import is not allowed: {node.module}.{alias.name}",
+                    status_code=400,
+                )
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
