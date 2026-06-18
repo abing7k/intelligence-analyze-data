@@ -56,6 +56,7 @@ def generate_analysis_code(
     language: str,
     chart_preference: str = "auto",
     model_id: str | None = None,
+    retry_feedback: dict[str, Any] | None = None,
 ) -> GeneratedAnalysis:
     system_prompt = (
         "You are a LangChain-orchestrated senior data analyst. Generate safe Python pandas code "
@@ -72,32 +73,36 @@ def generate_analysis_code(
         "in chart_spec while keeping x_field and y_field exactly equal to real result_table columns. "
         f"{answer_language_instruction(language)} Return only valid JSON."
     )
-    user_prompt = json.dumps(
-        {
-            "dataset_schema": dataset_schema,
-            "question": question,
-            "preferred_chart_type": chart_preference,
-            "required_json_schema": {
-                "intent": "short intent name",
-                "target_fields": ["field names used"],
-                "filters": [{"field": "field", "operator": "=", "value": "value"}],
-                "chart_type": "auto|line|bar|pie|scatter|heatmap|table",
-                "steps": ["step 1", "step 2"],
-                "code": "Python code that assigns result_table and chart_spec",
-                "chart_spec": {
-                    "chart_type": "line|bar|pie|scatter|heatmap|table",
-                    "x_field": "column or null",
-                    "y_field": "column or null",
-                    "group_field": "column or null",
-                    "title": "chart title",
-                    "x_label": "readable x-axis label or null",
-                    "y_label": "readable y-axis label or null",
-                },
-                "confidence": 0.0,
+    request_payload = {
+        "dataset_schema": dataset_schema,
+        "question": question,
+        "preferred_chart_type": chart_preference,
+        "required_json_schema": {
+            "intent": "short intent name",
+            "target_fields": ["field names used"],
+            "filters": [{"field": "field", "operator": "=", "value": "value"}],
+            "chart_type": "auto|line|bar|pie|scatter|heatmap|table",
+            "steps": ["step 1", "step 2"],
+            "code": "Python code that assigns result_table and chart_spec",
+            "chart_spec": {
+                "chart_type": "line|bar|pie|scatter|heatmap|table",
+                "x_field": "column or null",
+                "y_field": "column or null",
+                "group_field": "column or null",
+                "title": "chart title",
+                "x_label": "readable x-axis label or null",
+                "y_label": "readable y-axis label or null",
             },
+            "confidence": 0.0,
         },
-        ensure_ascii=False,
-    )
+    }
+    if retry_feedback:
+        request_payload["retry_feedback"] = retry_feedback
+        request_payload["repair_instruction"] = (
+            "The previous generated code failed validation or execution. Return a corrected JSON object only. "
+            "Do not repeat the failing pattern. Prefer simple pandas operations using the existing df, pd, and np."
+        )
+    user_prompt = json.dumps(request_payload, ensure_ascii=False)
     content = _invoke_model(system_prompt, user_prompt, json_mode=True, model_id=model_id)
     payload = _parse_json_object(content)
     if chart_preference != "auto":

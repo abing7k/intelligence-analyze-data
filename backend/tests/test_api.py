@@ -136,6 +136,73 @@ def test_analysis_query_history_and_report(monkeypatch):
         assert pdf_download.content.startswith(b"%PDF")
 
 
+def test_analysis_query_retries_after_generated_code_validation_error(monkeypatch):
+    calls = []
+
+    def fake_generate_analysis_code(
+        dataset_schema,
+        question,
+        language,
+        chart_preference="auto",
+        model_id=None,
+        retry_feedback=None,
+    ):
+        calls.append(retry_feedback)
+        if len(calls) == 1:
+            code = "import os\nresult_table = []\nchart_spec = {'chart_type': 'table', 'title': 'Invalid'}"
+        else:
+            assert retry_feedback["error_code"] == "CODE_UNSAFE"
+            code = (
+                "result_table = df.groupby('country', as_index=False)['gdp'].sum()\n"
+                "chart_spec = {'chart_type': 'bar', 'x_field': 'country', "
+                "'y_field': 'gdp', 'title': 'GDP by country'}"
+            )
+        return GeneratedAnalysis.model_validate(
+            {
+                "intent": "comparison",
+                "target_fields": ["country", "gdp"],
+                "filters": [],
+                "chart_type": "bar",
+                "steps": ["group by country", "sum GDP"],
+                "code": code,
+                "chart_spec": {
+                    "chart_type": "bar",
+                    "x_field": "country",
+                    "y_field": "gdp",
+                    "title": "GDP by country",
+                },
+                "confidence": 0.8,
+            }
+        )
+
+    monkeypatch.setattr(analysis_service.llm_service, "generate_analysis_code", fake_generate_analysis_code)
+    monkeypatch.setattr(
+        analysis_service.llm_service,
+        "explain_result",
+        lambda **kwargs: "The table compares GDP by country.",
+    )
+
+    with TestClient(app) as client:
+        upload = client.post(
+            "/api/datasets/upload",
+            files={"file": ("retry.csv", b"country,year,gdp\nMalaysia,2020,337\nChina,2020,14722\n", "text/csv")},
+        )
+        dataset_id = upload.json()["data"]["dataset_id"]
+
+        response = client.post(
+            "/api/analysis/query",
+            json={
+                "dataset_id": dataset_id,
+                "question": "Compare GDP by country",
+                "options": {"language": "en", "model_id": "gpt-5.5"},
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(calls) == 2
+    assert response.json()["data"]["table_result"]
+
+
 def test_comprehensive_analysis_includes_predictive_metrics():
     frame = {
         "age": list(range(20, 120)),

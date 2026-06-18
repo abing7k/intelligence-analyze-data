@@ -4,10 +4,10 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import get_settings
+from app.core.errors import AppError, NotFoundError
 from app.core.i18n import fallback_summary
-from app.core.errors import NotFoundError
 from app.models import database
-from app.models.schemas import AnalysisRequest
+from app.models.schemas import AnalysisRequest, GeneratedAnalysis
 from app.services import (
     chart_service,
     comprehensive_analysis_service,
@@ -15,8 +15,16 @@ from app.services import (
     llm_service,
     markdown_report_service,
 )
-from app.services.execution_service import execute_safe_code
+from app.services.execution_service import ExecutionResult, execute_safe_code
 from app.services.preprocess_service import schema_for_dataframe
+
+MAX_ANALYSIS_CODE_ATTEMPTS = 2
+RETRYABLE_ANALYSIS_ERROR_CODES = {
+    "CODE_UNSAFE",
+    "EXECUTION_FAILED",
+    "EXECUTION_TIMEOUT",
+    "LLM_OUTPUT_INVALID",
+}
 
 
 def submit_analysis(payload: AnalysisRequest) -> dict[str, Any]:
@@ -25,14 +33,13 @@ def submit_analysis(payload: AnalysisRequest) -> dict[str, Any]:
     schema = schema_for_dataframe(payload.dataset_id, df)
     selected_model = get_settings().resolve_llm_model(payload.options.model_id)
 
-    generated = llm_service.generate_analysis_code(
-        dataset_schema=schema,
+    generated, execution = _generate_and_execute_analysis(
+        df=df,
+        schema=schema,
         question=payload.question,
         language=payload.options.language,
-        chart_preference="auto",
         model_id=selected_model.id,
     )
-    execution = execute_safe_code(df, generated.code)
     chart_spec = {**generated.chart_spec.model_dump(), **execution.chart_spec}
     if chart_spec.get("chart_type") in (None, "auto") and generated.chart_type != "auto":
         chart_spec["chart_type"] = generated.chart_type
@@ -147,6 +154,53 @@ def submit_analysis(payload: AnalysisRequest) -> dict[str, Any]:
         {**result, "generated_code": generated.code}
     )
     return result
+
+
+def _generate_and_execute_analysis(
+    df: Any,
+    schema: dict[str, Any],
+    question: str,
+    language: str,
+    model_id: str,
+) -> tuple[GeneratedAnalysis, ExecutionResult]:
+    last_error: AppError | None = None
+    last_code: str | None = None
+    for attempt in range(MAX_ANALYSIS_CODE_ATTEMPTS):
+        retry_feedback = _analysis_retry_feedback(last_error, last_code) if last_error else None
+        kwargs: dict[str, Any] = {
+            "dataset_schema": schema,
+            "question": question,
+            "language": language,
+            "chart_preference": "auto",
+            "model_id": model_id,
+        }
+        if retry_feedback:
+            kwargs["retry_feedback"] = retry_feedback
+        try:
+            generated = llm_service.generate_analysis_code(**kwargs)
+            last_code = generated.code
+            execution = execute_safe_code(df, generated.code)
+            return generated, execution
+        except AppError as exc:
+            if exc.code not in RETRYABLE_ANALYSIS_ERROR_CODES or attempt == MAX_ANALYSIS_CODE_ATTEMPTS - 1:
+                raise
+            last_error = exc
+
+    raise last_error or AppError(
+        code="EXECUTION_FAILED",
+        message="Generated analysis code failed after retry.",
+        status_code=400,
+    )
+
+
+def _analysis_retry_feedback(error: AppError | None, generated_code: str | None) -> dict[str, Any] | None:
+    if error is None:
+        return None
+    return {
+        "error_code": error.code,
+        "error_message": error.message,
+        "previous_code": (generated_code or "")[-2000:],
+    }
 
 
 def get_analysis(analysis_id: str) -> dict[str, Any]:

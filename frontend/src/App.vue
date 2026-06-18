@@ -418,14 +418,45 @@ function apiUrl(path) {
 }
 
 async function apiRequest(path, options = {}) {
-  const response = await fetch(apiUrl(path), options)
+  const url = apiUrl(path)
+  let response
+  try {
+    response = await fetch(url, options)
+  } catch (error) {
+    throw new Error(`Cannot reach API: ${error.message || 'network request failed'}`)
+  }
   const contentType = response.headers.get('content-type') || ''
-  const payload = contentType.includes('application/json') ? await response.json() : await response.text()
+  let payload
+  try {
+    payload = contentType.includes('application/json') ? await response.json() : await response.text()
+  } catch (error) {
+    payload = ''
+  }
   if (!response.ok || payload?.success === false) {
-    const message = payload?.error?.message || response.statusText || 'Request failed'
-    throw new Error(message)
+    throw new Error(apiErrorMessage(response, payload))
   }
   return payload?.data ?? payload
+}
+
+function apiErrorMessage(response, payload) {
+  const status = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`
+  const requestId = payload && typeof payload === 'object' && payload.request_id ? ` Request ID: ${payload.request_id}` : ''
+  const message = extractApiErrorMessage(payload)
+  if (message) return `${message} (${status}.${requestId})`
+  return `${status} while requesting the API.${requestId}`
+}
+
+function extractApiErrorMessage(payload) {
+  if (!payload) return ''
+  if (typeof payload === 'string') {
+    const text = payload.trim()
+    if (!text || /^<!doctype html/i.test(text) || /^<html/i.test(text)) return ''
+    return text.slice(0, 500)
+  }
+  if (payload.error?.message) return payload.error.message
+  if (payload.message) return payload.message
+  if (payload.detail) return typeof payload.detail === 'string' ? payload.detail : JSON.stringify(payload.detail)
+  return ''
 }
 
 async function postJson(path, body) {
